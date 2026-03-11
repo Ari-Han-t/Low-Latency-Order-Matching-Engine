@@ -102,10 +102,70 @@ static void test_cancel_path() {
     assert(book.active_order_count() == 0);
 }
 
+static void test_cancel_rejects_wrong_user() {
+    LimitOrderBook::Config cfg{};
+    cfg.max_order_nodes = 1024;
+    cfg.snapshot_depth = 10;
+    LimitOrderBook book(cfg);
+    std::vector<Trade> trades;
+
+    NewOrder o1{};
+    o1.order_id = 200;
+    o1.user_id = 9001;
+    o1.side = Side::buy;
+    o1.price_ticks = 10000;
+    o1.quantity = 10;
+    bool ok = book.on_new_order(o1, trades, 1);
+    assert(ok);
+    assert(book.active_order_count() == 1);
+
+    CancelOrder bad_cancel{};
+    bad_cancel.order_id = 200;
+    bad_cancel.user_id = 9002;
+    ok = book.on_cancel_order(bad_cancel);
+    assert(!ok);
+    assert(book.active_order_count() == 1);
+
+    CancelOrder admin_cancel{};
+    admin_cancel.order_id = 200;
+    admin_cancel.user_id = 0;
+    ok = book.on_cancel_order(admin_cancel);
+    assert(ok);
+    assert(book.active_order_count() == 0);
+}
+
+static void test_reject_duplicate_order_id() {
+    LimitOrderBook::Config cfg{};
+    cfg.max_order_nodes = 1024;
+    cfg.snapshot_depth = 10;
+    LimitOrderBook book(cfg);
+    std::vector<Trade> trades;
+
+    NewOrder o1{};
+    o1.order_id = 300;
+    o1.user_id = 7001;
+    o1.side = Side::sell;
+    o1.price_ticks = 10100;
+    o1.quantity = 12;
+
+    bool ok = book.on_new_order(o1, trades, 1);
+    assert(ok);
+    assert(book.active_order_count() == 1);
+
+    NewOrder dup = o1;
+    dup.user_id = 7002;
+    dup.quantity = 9;
+    ok = book.on_new_order(dup, trades, 2);
+    assert(!ok);
+    assert(book.active_order_count() == 1);
+}
+
 int main() {
     test_crossing_trade();
     test_fifo_priority();
     test_cancel_path();
+    test_cancel_rejects_wrong_user();
+    test_reject_duplicate_order_id();
     std::cout << "All order book tests passed.\n";
     return 0;
 }

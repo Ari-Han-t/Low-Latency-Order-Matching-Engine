@@ -32,6 +32,9 @@ bool LimitOrderBook::on_cancel_order(const CancelOrder& order) {
         return false;
     }
     OrderNode* node = it->second;
+    if (order.user_id != 0 && node->user_id != order.user_id) {
+        return false;
+    }
     remove_order_node(node);
     return true;
 }

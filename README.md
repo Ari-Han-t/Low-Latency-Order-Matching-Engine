@@ -79,6 +79,7 @@ ws://127.0.0.1:9002
 ```json
 {
   "type": "new_order",
+  "request_id": "client-req-001",
   "order_id": 1001,
   "user_id": 42,
   "side": "buy",
@@ -93,6 +94,7 @@ ws://127.0.0.1:9002
 ```json
 {
   "type": "cancel_order",
+  "request_id": "client-req-002",
   "order_id": 1001,
   "user_id": 42,
   "client_ts_ns": 0
@@ -101,18 +103,36 @@ ws://127.0.0.1:9002
 
 ### Outbound events
 
-- `ack` for accepted/rejected command ingestion.
+- `ack` for accepted/rejected command ingestion. Includes:
+  - `schema_version`
+  - `request_id` (if provided by client)
+  - `reason_code` + `reason` when rejected
 - `l2` payload after accepted book updates:
+  - `schema_version`
   - `sequence`
   - `ts_ns`
   - `bids`: `[price_ticks, total_qty, order_count]`
   - `asks`: `[price_ticks, total_qty, order_count]`
   - `trades`: array of matched fills
 
+### Example `ack` event
+
+```json
+{
+  "schema_version": 1,
+  "type": "ack",
+  "event": "new_order",
+  "status": "accepted",
+  "request_id": "client-req-001",
+  "ts_ns": 1720000000000
+}
+```
+
 ### Example `l2` event
 
 ```json
 {
+  "schema_version": 1,
   "type": "l2",
   "sequence": 1024,
   "ts_ns": 1720000000000,
@@ -132,12 +152,30 @@ ws://127.0.0.1:9002
 }
 ```
 
+## Risk Guardrails
+
+Gateway validation rejects orders before enqueue if:
+
+- `order_id == 0`
+- `user_id == 0`
+- `quantity == 0` or `quantity > 250000`
+- `price_ticks` outside `[1, 2000000]`
+
 ## Threading Model
 
 - Producer threads enqueue commands through a lock-free MPSC queue.
 - Matcher thread is the single writer to the limit order book for deterministic matching.
 - Publisher thread fans out acknowledgements and `l2` snapshots to websocket clients.
 - Memory pool recycles order nodes to minimize heap-driven latency spikes.
+
+## Runtime Counters
+
+At shutdown, the engine prints:
+
+- submit accepted/rejected totals
+- commands processed/accepted/rejected
+- total trades and matched quantity
+- total market data events emitted
 
 ## Project Planning
 

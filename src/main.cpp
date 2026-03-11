@@ -3,6 +3,7 @@
 #include <csignal>
 #include <cstdint>
 #include <iostream>
+#include <string>
 #include <thread>
 
 #include <nlohmann/json.hpp>
@@ -16,6 +17,13 @@ namespace {
 using json = nlohmann::json;
 
 std::atomic<bool> g_keep_running{true};
+constexpr int k_schema_version = 1;
+
+struct GatewayRiskLimits {
+    int64_t min_price_ticks = 1;
+    int64_t max_price_ticks = 2'000'000;
+    uint64_t max_order_quantity = 250'000;
+};
 
 uint64_t now_ns() {
     const auto now = std::chrono::steady_clock::now().time_since_epoch();
@@ -38,22 +46,88 @@ bool parse_side(const std::string& value, lom::Side& out) {
     return false;
 }
 
-json ok_response(const std::string& type, uint64_t ts_ns) {
-    return json{
+json ok_response(const std::string& type, const std::string& request_id, uint64_t ts_ns) {
+    json out{
+        {"schema_version", k_schema_version},
         {"type", "ack"},
         {"event", type},
         {"status", "accepted"},
         {"ts_ns", ts_ns},
     };
+    if (!request_id.empty()) {
+        out["request_id"] = request_id;
+    }
+    return out;
 }
 
-json error_response(const std::string& reason, uint64_t ts_ns) {
-    return json{
+json error_response(
+    const std::string& reason_code,
+    const std::string& reason,
+    const std::string& request_id,
+    uint64_t ts_ns
+) {
+    json out = {
+        {"schema_version", k_schema_version},
         {"type", "ack"},
         {"status", "rejected"},
+        {"reason_code", reason_code},
         {"reason", reason},
         {"ts_ns", ts_ns},
     };
+    if (!request_id.empty()) {
+        out["request_id"] = request_id;
+    }
+    return out;
+}
+
+std::string parse_request_id(const json& inbound) {
+    if (!inbound.contains("request_id")) {
+        return {};
+    }
+
+    const auto& req = inbound["request_id"];
+    if (req.is_string()) {
+        return req.get<std::string>();
+    }
+    if (req.is_number_unsigned()) {
+        return std::to_string(req.get<uint64_t>());
+    }
+    if (req.is_number_integer()) {
+        return std::to_string(req.get<int64_t>());
+    }
+    return {};
+}
+
+bool validate_new_order(const lom::NewOrder& order, const GatewayRiskLimits& limits, std::string& reason) {
+    if (order.order_id == 0) {
+        reason = "order_id must be > 0";
+        return false;
+    }
+    if (order.user_id == 0) {
+        reason = "user_id must be > 0";
+        return false;
+    }
+    if (order.quantity == 0) {
+        reason = "quantity must be > 0";
+        return false;
+    }
+    if (order.quantity > limits.max_order_quantity) {
+        reason = "quantity exceeds max_order_quantity";
+        return false;
+    }
+    if (order.price_ticks < limits.min_price_ticks || order.price_ticks > limits.max_price_ticks) {
+        reason = "price_ticks outside configured risk band";
+        return false;
+    }
+    return true;
+}
+
+bool validate_cancel_order(const lom::CancelOrder& order, std::string& reason) {
+    if (order.order_id == 0) {
+        reason = "order_id must be > 0";
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -69,6 +143,7 @@ int main() {
     lom::MatchingEngine engine(engine_config);
 
     lom::WebSocketServer server;
+    const GatewayRiskLimits risk_limits{};
 
     engine.set_market_data_callback([&server](const std::string& payload) {
         (void)server.broadcast(payload);
@@ -78,6 +153,7 @@ int main() {
         try {
             const auto inbound = json::parse(payload);
             const std::string type = inbound.value("type", "");
+            const std::string request_id = parse_request_id(inbound);
 
             lom::Command cmd{};
             cmd.ingress_ts_ns = now_ns();
@@ -86,7 +162,10 @@ int main() {
                 const auto side_value = inbound.value("side", "");
                 lom::Side side{};
                 if (!parse_side(side_value, side)) {
-                    (void)server.send_to(client_id, error_response("invalid side", now_ns()).dump());
+                    (void)server.send_to(
+                        client_id,
+                        error_response("invalid_side", "invalid side", request_id, now_ns()).dump()
+                    );
                     return;
                 }
 
@@ -98,6 +177,14 @@ int main() {
                 no.price_ticks = inbound.at("price_ticks").get<int64_t>();
                 no.quantity = inbound.at("quantity").get<uint64_t>();
                 no.client_ts_ns = inbound.value("client_ts_ns", 0ull);
+                std::string reject_reason;
+                if (!validate_new_order(no, risk_limits, reject_reason)) {
+                    (void)server.send_to(
+                        client_id,
+                        error_response("risk_reject", reject_reason, request_id, now_ns()).dump()
+                    );
+                    return;
+                }
                 cmd.new_order = no;
             } else if (type == "cancel_order") {
                 cmd.type = lom::CommandType::cancel_order;
@@ -105,20 +192,37 @@ int main() {
                 co.order_id = inbound.at("order_id").get<uint64_t>();
                 co.user_id = inbound.value("user_id", 0ull);
                 co.client_ts_ns = inbound.value("client_ts_ns", 0ull);
+                std::string reject_reason;
+                if (!validate_cancel_order(co, reject_reason)) {
+                    (void)server.send_to(
+                        client_id,
+                        error_response("invalid_cancel", reject_reason, request_id, now_ns()).dump()
+                    );
+                    return;
+                }
                 cmd.cancel_order = co;
             } else {
-                (void)server.send_to(client_id, error_response("unsupported type", now_ns()).dump());
+                (void)server.send_to(
+                    client_id,
+                    error_response("unsupported_type", "unsupported type", request_id, now_ns()).dump()
+                );
                 return;
             }
 
             if (!engine.submit(std::move(cmd))) {
-                (void)server.send_to(client_id, error_response("ingress queue full", now_ns()).dump());
+                (void)server.send_to(
+                    client_id,
+                    error_response("ingress_queue_full", "ingress queue full", request_id, now_ns()).dump()
+                );
                 return;
             }
 
-            (void)server.send_to(client_id, ok_response(type, now_ns()).dump());
+            (void)server.send_to(client_id, ok_response(type, request_id, now_ns()).dump());
         } catch (const std::exception& ex) {
-            (void)server.send_to(client_id, error_response(std::string("bad request: ") + ex.what(), now_ns()).dump());
+            (void)server.send_to(
+                client_id,
+                error_response("bad_request", std::string("bad request: ") + ex.what(), "", now_ns()).dump()
+            );
         }
     });
 
@@ -141,5 +245,14 @@ int main() {
     server.stop();
     engine.stop();
     std::cout << "Final sequence: " << engine.sequence() << ", active orders: " << engine.active_order_count() << '\n';
+    const auto stats = engine.stats();
+    std::cout << "Engine stats: submit_ok=" << stats.submit_ok
+              << ", submit_rejected=" << stats.submit_rejected
+              << ", processed=" << stats.commands_processed
+              << ", accepted=" << stats.commands_accepted
+              << ", rejected=" << stats.commands_rejected
+              << ", trades=" << stats.trades_emitted
+              << ", matched_qty=" << stats.matched_quantity
+              << ", market_events=" << stats.market_events_emitted << '\n';
     return 0;
 }

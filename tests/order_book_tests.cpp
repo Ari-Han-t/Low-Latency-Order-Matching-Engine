@@ -160,12 +160,41 @@ static void test_reject_duplicate_order_id() {
     assert(book.active_order_count() == 1);
 }
 
+static void test_reject_invalid_order_fields() {
+    LimitOrderBook::Config cfg{};
+    cfg.max_order_nodes = 1024;
+    cfg.snapshot_depth = 10;
+    LimitOrderBook book(cfg);
+    std::vector<Trade> trades;
+
+    NewOrder zero_qty{};
+    zero_qty.order_id = 400;
+    zero_qty.user_id = 1;
+    zero_qty.side = Side::buy;
+    zero_qty.price_ticks = 10000;
+    zero_qty.quantity = 0;
+    bool ok = book.on_new_order(zero_qty, trades, 1);
+    assert(!ok);
+    assert(book.active_order_count() == 0);
+
+    NewOrder invalid_price{};
+    invalid_price.order_id = 401;
+    invalid_price.user_id = 1;
+    invalid_price.side = Side::sell;
+    invalid_price.price_ticks = 0;
+    invalid_price.quantity = 10;
+    ok = book.on_new_order(invalid_price, trades, 2);
+    assert(!ok);
+    assert(book.active_order_count() == 0);
+}
+
 int main() {
     test_crossing_trade();
     test_fifo_priority();
     test_cancel_path();
     test_cancel_rejects_wrong_user();
     test_reject_duplicate_order_id();
+    test_reject_invalid_order_fields();
     std::cout << "All order book tests passed.\n";
     return 0;
 }

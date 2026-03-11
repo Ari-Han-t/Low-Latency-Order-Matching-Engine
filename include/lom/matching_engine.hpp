@@ -23,6 +23,17 @@ public:
 
     using MarketDataCallback = std::function<void(const std::string&)>;
 
+    struct Stats {
+        uint64_t submit_ok = 0;
+        uint64_t submit_rejected = 0;
+        uint64_t commands_processed = 0;
+        uint64_t commands_accepted = 0;
+        uint64_t commands_rejected = 0;
+        uint64_t trades_emitted = 0;
+        uint64_t matched_quantity = 0;
+        uint64_t market_events_emitted = 0;
+    };
+
     MatchingEngine();
     explicit MatchingEngine(Config config);
     ~MatchingEngine();
@@ -41,6 +52,7 @@ public:
     [[nodiscard]] bool running() const;
     [[nodiscard]] uint64_t sequence() const;
     [[nodiscard]] std::size_t active_order_count() const;
+    [[nodiscard]] Stats stats() const;
 
 private:
     struct MarketEvent {
@@ -63,6 +75,14 @@ private:
 
     std::atomic<bool> running_{false};
     std::atomic<uint64_t> sequence_{0};
+    std::atomic<uint64_t> submit_ok_{0};
+    std::atomic<uint64_t> submit_rejected_{0};
+    std::atomic<uint64_t> commands_processed_{0};
+    std::atomic<uint64_t> commands_accepted_{0};
+    std::atomic<uint64_t> commands_rejected_{0};
+    std::atomic<uint64_t> trades_emitted_{0};
+    std::atomic<uint64_t> matched_quantity_{0};
+    std::atomic<uint64_t> market_events_emitted_{0};
 
     MarketDataCallback market_data_callback_{};
     std::thread matcher_thread_;

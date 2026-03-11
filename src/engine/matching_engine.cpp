@@ -30,11 +30,23 @@ void MatchingEngine::set_market_data_callback(MarketDataCallback cb) {
 }
 
 bool MatchingEngine::submit(const Command& cmd) {
-    return command_queue_.try_push(cmd);
+    const bool ok = command_queue_.try_push(cmd);
+    if (ok) {
+        submit_ok_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        submit_rejected_.fetch_add(1, std::memory_order_relaxed);
+    }
+    return ok;
 }
 
 bool MatchingEngine::submit(Command&& cmd) {
-    return command_queue_.try_push(std::move(cmd));
+    const bool ok = command_queue_.try_push(std::move(cmd));
+    if (ok) {
+        submit_ok_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        submit_rejected_.fetch_add(1, std::memory_order_relaxed);
+    }
+    return ok;
 }
 
 void MatchingEngine::start() {
@@ -73,6 +85,19 @@ std::size_t MatchingEngine::active_order_count() const {
     return book_.active_order_count();
 }
 
+MatchingEngine::Stats MatchingEngine::stats() const {
+    Stats out{};
+    out.submit_ok = submit_ok_.load(std::memory_order_relaxed);
+    out.submit_rejected = submit_rejected_.load(std::memory_order_relaxed);
+    out.commands_processed = commands_processed_.load(std::memory_order_relaxed);
+    out.commands_accepted = commands_accepted_.load(std::memory_order_relaxed);
+    out.commands_rejected = commands_rejected_.load(std::memory_order_relaxed);
+    out.trades_emitted = trades_emitted_.load(std::memory_order_relaxed);
+    out.matched_quantity = matched_quantity_.load(std::memory_order_relaxed);
+    out.market_events_emitted = market_events_emitted_.load(std::memory_order_relaxed);
+    return out;
+}
+
 void MatchingEngine::matcher_loop() {
     while (running_.load(std::memory_order_acquire) || command_queue_.size_approx() > 0) {
         Command cmd{};
@@ -80,6 +105,7 @@ void MatchingEngine::matcher_loop() {
             std::this_thread::sleep_for(std::chrono::microseconds(config_.idle_sleep_us));
             continue;
         }
+        commands_processed_.fetch_add(1, std::memory_order_relaxed);
 
         std::vector<Trade> trades;
         bool accepted = false;
@@ -91,7 +117,16 @@ void MatchingEngine::matcher_loop() {
         }
 
         if (accepted) {
+            commands_accepted_.fetch_add(1, std::memory_order_relaxed);
+            trades_emitted_.fetch_add(static_cast<uint64_t>(trades.size()), std::memory_order_relaxed);
+            uint64_t traded_qty = 0;
+            for (std::size_t i = 0; i < trades.size(); ++i) {
+                traded_qty += trades[i].quantity;
+            }
+            matched_quantity_.fetch_add(traded_qty, std::memory_order_relaxed);
             publish_book_and_trades(trades);
+        } else {
+            commands_rejected_.fetch_add(1, std::memory_order_relaxed);
         }
     }
 }
@@ -116,6 +151,7 @@ void MatchingEngine::publish_book_and_trades(const std::vector<Trade>& trades) {
     L2Snapshot snap = book_.snapshot(seq, ts);
 
     json payload = {
+        {"schema_version", 1},
         {"type", "l2"},
         {"sequence", snap.sequence},
         {"ts_ns", snap.ts_ns},
@@ -147,6 +183,7 @@ void MatchingEngine::publish_book_and_trades(const std::vector<Trade>& trades) {
     while (!market_queue_.try_push(std::move(evt))) {
         std::this_thread::sleep_for(std::chrono::microseconds(config_.idle_sleep_us));
     }
+    market_events_emitted_.fetch_add(1, std::memory_order_relaxed);
 }
 
 uint64_t MatchingEngine::now_ns() {

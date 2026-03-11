@@ -44,6 +44,22 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
+### Windows (MSVC) quickstart
+
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
+### Linux / WSL quickstart
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
 ## Run Engine
 
 ```bash
@@ -93,6 +109,36 @@ ws://127.0.0.1:9002
   - `asks`: `[price_ticks, total_qty, order_count]`
   - `trades`: array of matched fills
 
+### Example `l2` event
+
+```json
+{
+  "type": "l2",
+  "sequence": 1024,
+  "ts_ns": 1720000000000,
+  "bids": [[10050, 45, 3]],
+  "asks": [[10060, 20, 1]],
+  "trades": [
+    {
+      "taker_order_id": 2002,
+      "maker_order_id": 1999,
+      "buy_user_id": 77,
+      "sell_user_id": 51,
+      "price_ticks": 10060,
+      "quantity": 5,
+      "match_ts_ns": 1720000000000
+    }
+  ]
+}
+```
+
+## Threading Model
+
+- Producer threads enqueue commands through a lock-free MPSC queue.
+- Matcher thread is the single writer to the limit order book for deterministic matching.
+- Publisher thread fans out acknowledgements and `l2` snapshots to websocket clients.
+- Memory pool recycles order nodes to minimize heap-driven latency spikes.
+
 ## Test
 
 ```bash
@@ -108,4 +154,3 @@ ctest --test-dir build --output-on-failure
 ## Browser Smoke Test
 
 Open `examples/ws_client.html`, connect to `ws://127.0.0.1:9002`, and submit orders.
-

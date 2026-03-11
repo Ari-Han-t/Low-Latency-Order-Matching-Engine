@@ -139,6 +139,11 @@ ws://127.0.0.1:9002
 - Publisher thread fans out acknowledgements and `l2` snapshots to websocket clients.
 - Memory pool recycles order nodes to minimize heap-driven latency spikes.
 
+## Project Planning
+
+- Roadmap: `docs/ROADMAP.md`
+- Issue backlog: `docs/ISSUES_BACKLOG.md`
+
 ## Test
 
 ```bash

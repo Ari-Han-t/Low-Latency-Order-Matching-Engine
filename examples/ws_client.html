@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LOB WebSocket Test Client</title>
+  <style>
+    body { font-family: Segoe UI, Arial, sans-serif; margin: 24px; }
+    textarea { width: 100%; height: 220px; }
+    button { margin-right: 8px; margin-top: 8px; }
+    pre { background: #f5f7fb; padding: 12px; border: 1px solid #d0d8e6; max-height: 360px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h2>Low-Latency Matching Engine WebSocket Client</h2>
+  <p>Connect to <code>ws://127.0.0.1:9002</code> and send commands.</p>
+
+  <textarea id="payload">{"type":"new_order","order_id":1,"user_id":101,"side":"buy","price_ticks":10010,"quantity":15}</textarea>
+  <br />
+  <button id="connectBtn">Connect</button>
+  <button id="sendBtn">Send</button>
+  <button id="cancelBtn">Send Cancel</button>
+  <button id="closeBtn">Close</button>
+
+  <h3>Events</h3>
+  <pre id="log"></pre>
+
+  <script>
+    let ws = null;
+    const log = document.getElementById("log");
+    const payload = document.getElementById("payload");
+
+    function push(line) {
+      log.textContent += line + "\n";
+      log.scrollTop = log.scrollHeight;
+    }
+
+    document.getElementById("connectBtn").onclick = () => {
+      if (ws && ws.readyState === WebSocket.OPEN) return;
+      ws = new WebSocket("ws://127.0.0.1:9002");
+      ws.onopen = () => push("Connected");
+      ws.onclose = () => push("Closed");
+      ws.onerror = () => push("Error");
+      ws.onmessage = (evt) => push("<< " + evt.data);
+    };
+
+    document.getElementById("sendBtn").onclick = () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        push("Not connected");
+        return;
+      }
+      ws.send(payload.value);
+      push(">> " + payload.value);
+    };
+
+    document.getElementById("cancelBtn").onclick = () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        push("Not connected");
+        return;
+      }
+      const obj = JSON.parse(payload.value);
+      const msg = JSON.stringify({
+        type: "cancel_order",
+        order_id: obj.order_id,
+        user_id: obj.user_id
+      });
+      ws.send(msg);
+      push(">> " + msg);
+    };
+
+    document.getElementById("closeBtn").onclick = () => {
+      if (ws) ws.close();
+    };
+  </script>
+</body>
+</html>
+

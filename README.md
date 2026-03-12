@@ -60,6 +60,24 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
+## Benchmarks
+
+Performance on 300,000 order commands:
+
+```
+Active resting orders: 64,546
+Latency p50:  0.00 µs (sub-microsecond)
+Latency p95:  0.00 µs (sub-microsecond)
+Latency p99:  0.00 µs (sub-microsecond)
+Latency max:  3,054 µs (~3 ms)
+```
+
+Run the benchmark:
+
+```bash
+./build/lom_benchmark
+```
+
 ## Run Engine
 
 ```bash
